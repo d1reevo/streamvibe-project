@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StreamVibe - Видеохостинг (HTML/JS)</title>
+    
+    <!-- 1. Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Общие стили для темной темы */
+        body {
+            background-color: #0f0f12;
+            color: #f3ffec;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Убираем скроллбар (как в оригинале) */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* Стили для иконок Lucide (для настройки размера/цвета) */
+        .lucide {
+            display: inline-block;
+            stroke-width: 2;
+        }
+
+        /* Анимация уведомлений */
+        @keyframes bounce-in {
+            0% { transform: translateX(100%); opacity: 0; }
+            60% { transform: translateX(-10%); opacity: 1; }
+            100% { transform: translateX(0); opacity: 1; }
+        }
+        .animate-bounce-in {
+            animation: bounce-in 0.3s ease-out forwards;
+        }
+
+        /* Анимация переходов */
+        .page-fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn {
+            0% { opacity: 0; transform: translateY(10px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden">
+    <div id="app-container" class="flex flex-col h-full">
+        <!-- HEADER WILL BE RENDERED HERE -->
+    </div>
+    
+    <!-- Notifications Container -->
+    <div id="notifications-container" class="fixed bottom-6 right-6 flex flex-col gap-2 pointer-events-none z-50"></div>
+
+    <script>
+        // =========================================================
+        // ГЛОБАЛЬНОЕ СОСТОЯНИЕ (STATE)
+        // =========================================================
+        const CURRENT_USER = {
+            id: 'u1',
+            name: 'NeoCreator',
+            handle: '@neocreator',
+            avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix&backgroundColor=b6e3f4',
+            subscribers: 1420
+        };
+
+        let currentView = 'home';
+        let sidebarOpen = true;
+        let activeVideo = null;
+        let searchQuery = '';
+        let videosData = [];
+        let notifications = [];
+
+        const CATEGORIES = ["Все", "Дизайн", "Музыка", "Технологии", "Гейминг", "Атмосфера", "Спорт"];
+
+        const INITIAL_VIDEOS = [
+            { id: 1, title: "Cyberpunk City Ambience | 4K", thumbnail: "https://images.unsplash.com/photo-1555680202-c86f0e12f086?w=800&q=80", videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4", author: "Future World", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Future", views: 125000, likes: 4500, date: "2 дня назад", description: "Погрузитесь в атмосферу ночного города будущего.", category: "Атмосфера" },
+            { id: 2, title: "Абстрактная 3D Анимация - Blender Loop", thumbnail: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&q=80", videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", author: "3D Artist", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=3D", views: 8900, likes: 320, date: "5 часов назад", description: "Туториал по созданию залипательных петель в Blender 4.0.", category: "Дизайн" },
+            { id: 3, title: "Лоу-фай биты для работы и учебы", thumbnail: "https://images.unsplash.com/photo-1516280440614-6697288d5d38?w=800&q=80", videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4", author: "Lofi Girl Fan", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Music", views: 2300000, likes: 150000, date: "1 год назад", description: "Лучшая подборка для концентрации.", category: "Музыка" }
+        ];
+
+        // =========================================================
+        // УТИЛИТЫ
+        // =========================================================
+
+        function formatViews(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num;
+        }
+
+        // Рендеринг иконки Lucide (HTML-строка)
+        function renderIcon(name, size = 20, className = '', fill = 'none') {
+            const iconData = lucide.icons[name];
+            if (!iconData) return '';
+            
+            const svgAttrs = `width="${size}" height="${size}" viewBox="0 0 24 24" fill="${fill}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide ${className}"`;
+            
+            return `<svg ${svgAttrs}>${iconData.contents}</svg>`;
+        }
+
+        // =========================================================
+        // ФУНКЦИИ СОСТОЯНИЯ (STATE MANAGEMENT)
+        // =========================================================
+
+        function initData() {
+            // Загружаем данные из LocalStorage при запуске
+            const storedVideos = localStorage.getItem('streamvibe_videos');
+            videosData = storedVideos ? JSON.parse(storedVideos) : INITIAL_VIDEOS;
+            renderApp();
+        }
+
+        function updateVideos(newVideos) {
+            videosData = newVideos;
+            localStorage.setItem('streamvibe_videos', JSON.stringify(videosData));
+            renderApp(); // Перерисовываем главный компонент
+        }
+
+        function setView(viewName, video = null) {
+            currentView = viewName;
+            activeVideo = video;
+            renderApp();
+        }
+
+        function toggleSidebar() {
+            sidebarOpen = !sidebarOpen;
+            renderApp();
+        }
+
+        function addNotification(text) {
+            const id = Date.now();
+            notifications.push({ id, text });
+            renderNotifications();
+            setTimeout(() => {
+                notifications = notifications.filter(n => n.id !== id);
+                renderNotifications();
+            }, 4000);
+        }
+
+        // =========================================================
+        // РЕНДЕРИНГ ЭЛЕМЕНТОВ
+        // =========================================================
+
+        function renderNotifications() {
+            const container = document.getElementById('notifications-container');
+            if (!container) return;
+            container.innerHTML = notifications.map(n => `
+                <div id="notification-${n.id}" class="bg-slate-800 border border-indigo-500/30 text-white px-4 py-3 rounded-lg shadow-xl flex items-center gap-3 animate-bounce-in">
+                    ${renderIcon('CheckCircle', 20, 'text-green-400')}
+                    <span>${n.text}</span>
+                </div>
+            `).join('');
+        }
+
+        function renderHeader() {
+            return `
+                <header class="h-16 border-b border-white/5 bg-[#0f0f12]/90 backdrop-blur-md sticky top-0 z-40 px-4 flex items-center justify-between gap-4">
+                    <div class="flex items-center gap-4">
+                        <button onclick="toggleSidebar()" class="p-2 hover:bg-white/5 rounded-full transition-colors">
+                            ${renderIcon('Menu', 24, 'text-gray-400')}
+                        </button>
+                        <div onclick="setView('home')" class="flex items-center gap-2 cursor-pointer group">
+                            <div class="w-8 h-8 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(79,70,229,0.5)] group-hover:scale-110 transition-transform">
+                                ${renderIcon('Play', 16, 'text-white ml-0.5', 'white')}
+                            </div>
+                            <span class="text-xl font-bold tracking-tight hidden sm:block">
+                                Stream<span class="text-indigo-400">Vibe</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex-1 max-w-xl relative hidden md:block group">
+                        <input 
+                            type="text" 
+                            placeholder="Поиск контента..." 
+                            oninput="searchQuery = this.value; setView('home');"
+                            value="${searchQuery}"
+                            class="w-full bg-[#1a1a1f] border border-white/5 focus:border-indigo-500/50 rounded-full py-2.5 pl-12 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500/50 transition-all shadow-inner text-white"
+                        />
+                        ${renderIcon('Search', 18, 'absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-indigo-400 transition-colors')}
+                    </div>
+
+                    <div class="flex items-center gap-2 sm:gap-4">
+                        <button 
+                            onclick="setView('upload')"
+                            class="flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full font-medium text-sm transition-all ${currentView === 'upload' ? 'bg-indigo-600 text-white shadow-[0_0_15px_rgba(79,70,229,0.4)]' : 'bg-white/5 hover:bg-white/10 text-gray-300'}"
+                        >
+                            ${renderIcon('PlusSquare', 18)}
+                            <span class="hidden sm:inline">Создать</span>
+                        </button>
+                        <button class="p-2 hover:bg-white/5 rounded-full relative">
+                            ${renderIcon('Bell', 20, 'text-gray-400')}
+                            <span class="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-[#0f0f12]"></span>
+                        </button>
+                        <button onclick="setView('profile')" class="w-9 h-9 rounded-full overflow-hidden border border-white/10 hover:border-indigo-500 transition-colors">
+                            <img src="${CURRENT_USER.avatar}" alt="User" class="w-full h-full" />
+                        </button>
+                    </div>
+                </header>
+            `;
+        }
+
+        function renderSidebar() {
+            const items = [
+                { id: 'home', icon: 'Home', label: 'Главная' },
+                { id: 'trending', icon: 'Compass', label: 'Тренды' },
+                { id: 'subs', icon: 'Users', label: 'Подписки' },
+                { id: 'library', icon: 'Film', label: 'Библиотека' },
+            ];
+
+            return `
+                <aside class="${sidebarOpen ? 'w-64' : 'w-[70px]'} hidden md:flex flex-col border-r border-white/5 bg-[#0f0f12] transition-all duration-300 ease-in-out flex-shrink-0">
+                    <nav class="p-3 space-y-1">
+                        ${items.map(item => `
+                            <button 
+                                onclick="setView('${item.id}')"
+                                class="w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-200 group ${currentView === item.id ? 'bg-indigo-600/10 text-indigo-400' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'}"
+                            >
+                                ${renderIcon(item.icon, 22, `min-w-[22px] transition-transform group-hover:scale-110 ${currentView === item.id ? 'stroke-[2.5px]' : ''}`)}
+                                <span class="font-medium overflow-hidden whitespace-nowrap transition-opacity duration-200 ${sidebarOpen ? 'opacity-100' : 'opacity-0 w-0'}" style="${sidebarOpen ? '' : 'width:0;'}">
+                                    ${item.label}
+                                </span>
+                            </button>
+                        `).join('')}
+                    </nav>
+                </aside>
+            `;
+        }
+
+        function renderHomeView() {
+            const filteredVideos = videosData.filter(v => 
+                v.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                v.author.toLowerCase().includes(searchQuery.toLowerCase())
+            );
+
+            const videoCards = filteredVideos.map(video => `
+                <div onclick="setView('watch', ${JSON.stringify(video).replace(/"/g, '&quot;')})" class="group cursor-pointer flex flex-col gap-3">
+                    <div class="relative aspect-video rounded-xl overflow-hidden bg-slate-800 shadow-lg border border-white/5 group-hover:border-indigo-500/50 transition-all duration-300">
+                        <img src="${video.thumbnail}" alt="${video.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onerror="this.src='https://placehold.co/600x337/1e293b/a5b4fc?text=Video+Thumbnail';" />
+                        <div class="absolute inset-0 bg-black/20 group-hover:bg-black/0 transition-colors"></div>
+                        <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                            <div class="w-12 h-12 bg-indigo-600/90 rounded-full flex items-center justify-center backdrop-blur-sm transform scale-50 group-hover:scale-100 transition-transform">
+                                ${renderIcon('Play', 20, 'ml-1', 'white')}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex gap-3 px-1">
+                        <img src="${video.avatar}" class="w-9 h-9 rounded-full object-cover bg-slate-700 flex-shrink-0" alt="" />
+                        <div class="flex flex-col gap-1">
+                            <h3 class="font-semibold text-gray-100 leading-tight group-hover:text-indigo-400 transition-colors line-clamp-2">${video.title}</h3>
+                            <div class="text-sm text-gray-500">
+                                <p class="hover:text-gray-300 transition-colors">${video.author}</p>
+                                <p>${formatViews(video.views)} просмотров • ${video.date}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            return `
+                <div class="space-y-8 page-fade-in">
+                    <!-- Categories -->
+                    <div class="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+                        ${CATEGORIES.map((cat, i) => `
+                            <button class="px-5 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all border ${i === 0 ? 'bg-white text-black border-white' : 'bg-[#1a1a1f] border-white/10 text-gray-400 hover:bg-white/10 hover:border-white/20'}">
+                                ${cat}
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <!-- Video Grid -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        ${videoCards.length > 0 ? videoCards : `
+                        <div class="col-span-full text-center py-20 text-gray-500">
+                            ${renderIcon('Search', 48, 'mx-auto mb-4 opacity-20')}
+                            <p class="text-lg">Видео не найдены</p>
+                            <p class="text-sm">Попробуйте изменить запрос</p>
+                        </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderWatchView(video) {
+            const isMyVideo = video.author === CURRENT_USER.name;
+            let subscribed = false; // Mock state
+            let liked = false; // Mock state
+
+            // Mock comments for the video
+            const commentsList = [
+                { id: 101, user: 'CyberFan', text: 'Вау, атмосфера просто космос! 🌌', time: '2 часа назад' },
+                { id: 102, user: 'DesignPro', text: 'Очень крутой монтаж.', time: '5 часов назад' }
+            ];
+
+            const relatedVideos = videosData.filter(v => v.id !== video.id).slice(0, 8);
+            
+            // Note: Like/Subscribe functionality is simulated (no persistent state change here)
+            const videoComponent = `
+                <div class="flex flex-col lg:flex-row gap-8 max-w-[1800px] mx-auto page-fade-in">
+                    <!-- Left: Player & Info -->
+                    <div class="flex-1 min-w-0">
+                        <!-- Video Container -->
+                        <div class="w-full aspect-video bg-black rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)] border border-white/5 relative">
+                            <video src="${video.videoUrl}" poster="${video.thumbnail}" controls autoplay class="w-full h-full object-contain"></video>
+                        </div>
+
+                        <div class="mt-6 space-y-4">
+                            <h1 class="text-2xl font-bold md:text-3xl">${video.title}</h1>
+                            
+                            <div class="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-white/5">
+                                <div class="flex items-center gap-4">
+                                    <div class="w-12 h-12 rounded-full p-[2px] bg-gradient-to-tr from-indigo-500 to-pink-500">
+                                        <img src="${video.avatar}" class="w-full h-full rounded-full border-2 border-[#0f0f12]" alt="" />
+                                    </div>
+                                    <div>
+                                        <h3 class="font-bold text-lg">${video.author}</h3>
+                                        <p class="text-sm text-gray-400">125K подписчиков</p>
+                                    </div>
+                                    <button onclick="addNotification('${subscribed ? 'Вы отписались' : 'Вы подписались'} на ${video.author}')"
+                                        class="ml-4 px-6 py-2 rounded-full font-semibold transition-all ${subscribed ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white text-black hover:bg-gray-200'}">
+                                        ${subscribed ? 'Вы подписаны' : 'Подписаться'}
+                                    </button>
+                                </div>
+
+                                <div class="flex items-center gap-2">
+                                     ${isMyVideo ? `
+                                        <button onclick="deleteVideoHandler(${video.id})" class="flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors mr-2">
+                                            ${renderIcon('Trash2', 18)} <span class="text-sm font-semibold">Удалить</span>
+                                        </button>
+                                    ` : ''}
+
+                                    <div class="flex items-center bg-[#1a1a1f] rounded-full border border-white/5">
+                                        <button onclick="addNotification('${liked ? 'Лайк удален' : 'Лайк поставлен'}')" class="flex items-center gap-2 px-4 py-2 hover:bg-white/5 rounded-l-full transition-colors ${liked ? 'text-indigo-400' : 'text-gray-300'}">
+                                            ${renderIcon('Heart', 20, liked ? 'fill-current' : '')}
+                                            <span class="font-semibold">${liked ? video.likes + 1 : video.likes}</span>
+                                        </button>
+                                        <div class="w-[1px] h-6 bg-white/10"></div>
+                                        <button class="px-4 py-2 hover:bg-white/5 rounded-r-full text-gray-300">${renderIcon('Heart', 20, 'rotate-180')}</button>
+                                    </div>
+                                    
+                                    <button onclick="addNotification('Ссылка скопирована')" class="p-3 bg-[#1a1a1f] rounded-full border border-white/5 hover:bg-white/5 text-gray-300">${renderIcon('Share2', 20)}</button>
+                                    <button class="p-3 bg-[#1a1a1f] rounded-full border border-white/5 hover:bg-white/5 text-gray-300">${renderIcon('MoreHorizontal', 20)}</button>
+                                </div>
+                            </div>
+
+                            <!-- Description -->
+                            <div class="bg-[#1a1a1f] rounded-xl p-4 text-sm text-gray-300 hover:bg-[#202026] transition-colors cursor-pointer border border-white/5">
+                                <div class="font-semibold text-white mb-2 flex gap-4">
+                                    <span>${formatViews(video.views)} просмотров</span>
+                                    <span>${video.date}</span>
+                                </div>
+                                <p class="whitespace-pre-line leading-relaxed">${video.description}</p>
+                            </div>
+
+                            <!-- Comments -->
+                            <div class="pt-6">
+                                <h3 class="text-xl font-bold mb-6 flex items-center gap-2">Комментарии <span class="text-gray-500 text-base font-normal">${commentsList.length}</span></h3>
+                                
+                                <form onsubmit="handleComment(event, ${video.id})" class="flex gap-4 mb-8">
+                                    <img src="${CURRENT_USER.avatar}" class="w-10 h-10 rounded-full" alt="" />
+                                    <div class="flex-1">
+                                        <input id="comment-input" type="text" placeholder="Оставьте комментарий..." class="w-full bg-transparent border-b border-gray-700 py-2 focus:border-indigo-500 focus:outline-none transition-colors text-white" />
+                                        <div class="flex justify-end mt-2">
+                                            <button type="submit" class="px-4 py-2 bg-indigo-600 rounded-full text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all">Отправить</button>
+                                        </div>
+                                    </div>
+                                </form>
+
+                                <div class="space-y-6">
+                                    ${commentsList.map(c => `
+                                        <div class="flex gap-4">
+                                            <div class="w-10 h-10 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center text-sm font-bold">${c.user[0]}</div>
+                                            <div>
+                                                <div class="flex items-center gap-2 mb-1">
+                                                    <span class="font-semibold text-sm">${c.user}</span>
+                                                    <span class="text-xs text-gray-500">${c.time}</span>
+                                                </div>
+                                                <p class="text-gray-300 text-sm">${c.text}</p>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Recommendations -->
+                    <div class="w-full lg:w-[400px] flex flex-col gap-4 flex-shrink-0">
+                        <h3 class="font-bold text-lg mb-2">Далее</h3>
+                        ${relatedVideos.map(v => `
+                            <div onclick="setView('watch', ${JSON.stringify(v).replace(/"/g, '&quot;')})" class="flex gap-3 cursor-pointer group p-2 rounded-xl hover:bg-white/5 transition-colors">
+                                <div class="relative w-40 aspect-video rounded-lg overflow-hidden bg-slate-800 flex-shrink-0 border border-white/5">
+                                    <img src="${v.thumbnail}" class="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" onerror="this.src='https://placehold.co/160x90/1e293b/a5b4fc?text=Thumb';" />
+                                    <span class="absolute bottom-1 right-1 bg-black/80 text-white text-[10px] px-1 rounded font-bold">04:20</span>
+                                </div>
+                                <div class="flex flex-col gap-1 min-w-0">
+                                    <h4 class="font-semibold text-sm leading-tight line-clamp-2 group-hover:text-indigo-400 transition-colors">${v.title}</h4>
+                                    <div class="text-xs text-gray-500 mt-1">
+                                        <p>${v.author}</p>
+                                        <p>${formatViews(v.views)} • ${v.date}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            return videoComponent;
+        }
+
+        function renderUploadView() {
+            const uploadComponent = `
+                <div class="max-w-3xl mx-auto page-fade-in">
+                    <div class="flex items-center justify-between mb-8">
+                        <h1 class="text-2xl font-bold">Загрузка видео</h1>
+                        <button onclick="setView('home')" class="p-2 hover:bg-white/10 rounded-full transition-colors">${renderIcon('X', 24)}</button>
+                    </div>
+
+                    <form id="upload-form" onsubmit="handleUploadSubmit(event)" class="space-y-8">
+                        <!-- Drag & Drop Area -->
+                        <div id="drop-area" 
+                            class="border-2 border-dashed rounded-3xl p-10 flex flex-col items-center justify-center text-center transition-all h-64 border-gray-700 bg-[#1a1a1f] hover:border-gray-500"
+                        >
+                             <div class="w-16 h-16 bg-[#25252b] rounded-full flex items-center justify-center mb-4 shadow-lg">${renderIcon('Upload', 32, 'text-gray-400')}</div>
+                            <p class="text-lg font-medium mb-2">Перетащите видео сюда</p>
+                            <p class="text-gray-500 text-sm mb-6">или выберите файл на компьютере (mp4, webm)</p>
+                            <label class="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-full font-medium cursor-pointer transition-all shadow-lg hover:shadow-indigo-500/25">
+                                Выбрать файл
+                                <input type="file" id="video-file-input" accept="video/*" class="hidden" onchange="handleFileInput(this.files[0], 'video')" />
+                            </label>
+                            <div id="video-file-info" class="mt-4 text-center hidden"></div>
+                        </div>
+
+                        <!-- Fields -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                            <div class="md:col-span-2 space-y-6">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-2">Название</label>
+                                    <input required type="text" id="video-title" placeholder="Введите название видео" class="w-full bg-[#1a1a1f] border border-gray-700 rounded-xl px-4 py-3 focus:border-indigo-500 focus:outline-none transition-colors text-white" />
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-2">Описание</label>
+                                    <textarea rows="5" id="video-description" placeholder="О чем ваше видео?" class="w-full bg-[#1a1a1f] border border-gray-700 rounded-xl px-4 py-3 focus:border-indigo-500 focus:outline-none transition-colors resize-none text-white"></textarea>
+                                </div>
+                            </div>
+
+                            <div class="space-y-4">
+                                <label class="block text-sm font-medium text-gray-400">Обложка</label>
+                                <div class="aspect-video bg-[#1a1a1f] rounded-xl border border-gray-700 overflow-hidden relative group">
+                                    <img id="thumb-preview" src="https://placehold.co/600x337/1e293b/a5b4fc?text=Обложка" class="w-full h-full object-cover" alt="preview" />
+                                    <label class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                        <span class="text-white font-medium text-sm">Изменить</span>
+                                        <input type="file" id="thumb-file-input" accept="image/*" class="hidden" onchange="handleFileInput(this.files[0], 'thumb')" />
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-end gap-4 pt-4 border-t border-gray-800">
+                            <button type="button" onclick="setView('home')" class="px-6 py-2.5 rounded-full font-medium hover:bg-white/5 transition-colors">Отмена</button>
+                            <button type="submit" id="submit-upload" disabled class="px-8 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-full font-medium shadow-lg shadow-indigo-500/20 transition-all flex items-center gap-2">Опубликовать</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            return uploadComponent;
+        }
+
+        function renderProfileView() {
+            return `
+                <div class="flex flex-col items-center justify-center h-[70vh] text-center space-y-4 page-fade-in">
+                    <div class="w-32 h-32 rounded-full p-[4px] bg-gradient-to-tr from-indigo-500 to-pink-500">
+                        <img src="${CURRENT_USER.avatar}" alt="Profile" class="w-full h-full rounded-full border-4 border-[#0f0f12] bg-slate-800" />
+                    </div>
+                    <h1 class="text-3xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">${CURRENT_USER.name}</h1>
+                    <p class="text-gray-400">${CURRENT_USER.handle} • ${CURRENT_USER.subscribers} подписчиков</p>
+                    <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5 max-w-md">
+                        <p class="text-sm text-gray-400">Это ваш профиль. Здесь пока пусто, но вы можете загрузить свое первое видео через кнопку "Создать" в верхней панели!</p>
+                    </div>
+                        <button onclick="setView('upload')" class="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded-full font-medium transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)]">Загрузить видео</button>
+                </div>
+            `;
+        }
+
+        function renderMainContent() {
+            const mainContentEl = document.getElementById('main-content');
+            let contentHTML = '';
+
+            switch (currentView) {
+                case 'home':
+                    contentHTML = renderHomeView();
+                    break;
+                case 'watch':
+                    contentHTML = activeVideo ? renderWatchView(activeVideo) : renderHomeView();
+                    break;
+                case 'upload':
+                    contentHTML = renderUploadView();
+                    break;
+                case 'profile':
+                    contentHTML = renderProfileView();
+                    break;
+                case 'trending':
+                case 'subs':
+                case 'library':
+                    contentHTML = renderEmptyView(currentView);
+                    break;
+                default:
+                    contentHTML = renderHomeView();
+            }
+
+            mainContentEl.innerHTML = contentHTML;
+            // Применяем drag & drop после рендеринга, если это страница загрузки
+            if (currentView === 'upload') {
+                setupDragAndDrop();
+            }
+        }
+
+        function renderEmptyView(viewName) {
+            const titleMap = {
+                'trending': { icon: 'Compass', title: 'Тренды', description: 'Популярные видео еще не загружены. Попробуйте обновить страницу.' },
+                'subs': { icon: 'Users', title: 'Подписки', description: 'Здесь будут каналы, на которые вы подпишетесь.' },
+                'library': { icon: 'Film', title: 'Библиотека', description: 'Здесь будет ваша история просмотров и плейлисты.' },
+            };
+            const { icon, title, description } = titleMap[viewName];
+
+            return `
+                <div class="flex flex-col items-center justify-center h-[70vh] text-center space-y-4 text-gray-400 page-fade-in">
+                    ${renderIcon(icon, 48, 'opacity-50')}
+                    <h1 class="text-2xl font-bold text-white">${title}</h1>
+                    <p class="text-sm max-w-sm">${description}</p>
+                    <button onclick="setView('home')" class="mt-4 px-6 py-2 text-sm font-medium rounded-full bg-white/10 hover:bg-white/20 transition-colors">
+                        На главную
+                    </button>
+                </div>
+            `;
+        }
+
+
+        // =========================================================
+        // ГЛАВНЫЙ РЕНДЕР ПРИЛОЖЕНИЯ
+        // =========================================================
+
+        function renderApp() {
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                ${renderHeader()}
+                <div class="flex flex-1 overflow-hidden">
+                    ${renderSidebar()}
+                    <main id="main-content" class="flex-1 overflow-y-auto relative p-6 md:p-8 max-w-[1920px] mx-auto scrollbar-hide"></main>
+                </div>
+            `;
+            renderMainContent();
+            renderNotifications();
+        }
+
+
+        // =========================================================
+        // ЛОГИКА ЗАГРУЗКИ ФАЙЛОВ
+        // =========================================================
+
+        let tempVideoFile = null;
+        let tempThumbFile = null;
+
+        function updateUploadButton() {
+            const button = document.getElementById('submit-upload');
+            if (button) {
+                button.disabled = !(tempVideoFile && document.getElementById('video-title').value.trim());
+            }
+        }
+
+        function handleFileInput(file, type) {
+            if (!file) return;
+
+            if (type === 'video') {
+                tempVideoFile = file;
+                const infoDiv = document.getElementById('video-file-info');
+                const dropArea = document.getElementById('drop-area');
+                
+                infoDiv.innerHTML = `
+                    <div class="w-full flex flex-col items-center justify-center gap-4">
+                        ${renderIcon('Film', 48, 'text-indigo-400')}
+                        <div>
+                            <p class="font-semibold text-lg text-indigo-200">${file.name}</p>
+                            <p class="text-sm text-gray-400">${(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                        </div>
+                        <button type="button" onclick="tempVideoFile=null; document.getElementById('video-file-input').value = ''; updateUploadButton(); handleFileInput(null, 'video');" class="text-red-400 hover:underline text-sm">Удалить</button>
+                    </div>
+                `;
+                infoDiv.classList.remove('hidden');
+                dropArea.innerHTML = infoDiv.innerHTML;
+            } else if (type === 'thumb') {
+                tempThumbFile = file;
+                document.getElementById('thumb-preview').src = URL.createObjectURL(file);
+            }
+            
+            // Прослушиваем изменения в поле названия
+            document.getElementById('video-title').addEventListener('input', updateUploadButton);
+            
+            updateUploadButton();
+        }
+
+        function setupDragAndDrop() {
+            const dropArea = document.getElementById('drop-area');
+            if (!dropArea) return;
+
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            dropArea.addEventListener('dragenter', () => dropArea.classList.add('border-indigo-500', 'bg-indigo-500/10'), false);
+            dropArea.addEventListener('dragleave', () => dropArea.classList.remove('border-indigo-500', 'bg-indigo-500/10'), false);
+            dropArea.addEventListener('dragover', () => dropArea.classList.add('border-indigo-500', 'bg-indigo-500/10'), false);
+
+            dropArea.addEventListener('drop', (e) => {
+                dropArea.classList.remove('border-indigo-500', 'bg-indigo-500/10');
+                let dt = e.dataTransfer;
+                let files = dt.files;
+                if (files.length > 0 && files[0].type.startsWith('video/')) {
+                    handleFileInput(files[0], 'video');
+                }
+            }, false);
+        }
+
+        function handleUploadSubmit(e) {
+            e.preventDefault();
+            const title = document.getElementById('video-title').value.trim();
+            const description = document.getElementById('video-description').value.trim();
+
+            if (!tempVideoFile || !title) return;
+
+            const submitButton = document.getElementById('submit-upload');
+            submitButton.innerHTML = 'Загрузка...';
+            submitButton.disabled = true;
+
+            // Имитация загрузки и сохранение
+            setTimeout(() => {
+                const newVideo = {
+                    id: Date.now(),
+                    title: title,
+                    description: description,
+                    // URL.createObjectURL создает временную ссылку для воспроизведения в браузере
+                    videoUrl: URL.createObjectURL(tempVideoFile),
+                    thumbnail: tempThumbFile ? URL.createObjectURL(tempThumbFile) : 'https://placehold.co/600x337/1e293b/a5b4fc?text=Обложка',
+                    author: CURRENT_USER.name,
+                    avatar: CURRENT_USER.avatar,
+                    views: 0,
+                    likes: 0,
+                    date: 'Только что',
+                    category: 'Загруженное'
+                };
+
+                updateVideos([newVideo, ...videosData]);
+                tempVideoFile = null;
+                tempThumbFile = null;
+                setView('home');
+                addNotification(`Видео "${title}" успешно опубликовано!`);
+            }, 1500);
+        }
+
+        function deleteVideoHandler(videoId) {
+            // eslint-disable-next-line no-restricted-globals
+            if (confirm('Вы уверены, что хотите удалить это видео?')) {
+                const updatedVideos = videosData.filter(v => v.id !== videoId);
+                updateVideos(updatedVideos);
+                setView('home');
+                addNotification('Видео удалено.');
+            }
+        }
+        
+        function handleComment(e, videoId) {
+            e.preventDefault();
+            const input = document.getElementById('comment-input');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            addNotification(`Комментарий: "${text}" отправлен!`);
+            input.value = '';
+            // Перерисовывать не будем, просто уведомим, т.к. комментарии не сохраняются
+        }
+
+
+        // Инициализация при загрузке страницы
+        window.onload = initData;
+
+    </script>
+</body>
+</html>
